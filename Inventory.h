@@ -16,7 +16,8 @@ class Inventory {
         int maxWeight;
     public:
         Inventory(int maxSlots, int maxWeight);
-
+        Inventory();
+        ~Inventory();
         bool addItem(const Item& item);
         bool removeItem(const std::string& name);
         bool hasItem(const std::string& name) const;
