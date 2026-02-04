@@ -1,0 +1,316 @@
+name: Autograding Tests
+
+on:
+  push:
+  repository_dispatch:
+
+permissions:
+  checks: write
+  actions: read
+  contents: read
+
+jobs:
+  run-autograding-tests:
+    runs-on: ubuntu-latest
+    if: github.actor != 'github-classroom[bot]'
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Check required files
+        run: |
+          for f in Item.h Item.cpp Inventory.h Inventory.cpp; do
+            if [ ! -f "$f" ]; then
+              echo "Missing required file: $f"
+              exit 1
+            fi
+          done
+
+      - name: Download doctest.h
+        run: |
+          mkdir -p third_party
+          curl -L -o third_party/doctest.h \
+            https://raw.githubusercontent.com/doctest/doctest/master/doctest/doctest.h
+
+      - name: Inject tests.cpp
+        run: |
+          cat > tests.cpp << 'EOF'
+          // tests.cpp
+          // Autograder test suite (doctest)
+          //
+          // Expected compile command (example):
+          // g++ -std=c++17 -Wall -Wextra -Werror -Ithird_party Item.cpp Inventory.cpp tests.cpp -o tests
+          //
+          // Assumes doctest.h is available in include path (e.g., third_party/doctest.h via -Ithird_party)
+
+          #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+          #include "doctest.h"
+
+          #include "Item.h"
+          #include "Inventory.h"
+
+          #include <string>
+
+          // Helper to keep test code short
+          static Item makeItem(const std::string& name, int weight, int value, ItemType type, int power) {
+              return Item(name, weight, value, type, power);
+          }
+
+          TEST_CASE("Inventory initializes correctly") {
+              Inventory inv(5, 50);
+
+              CHECK(inv.getMaxSlots() == 5);
+              CHECK(inv.getMaxWeight() == 50);
+              CHECK(inv.getItemCount() == 0);
+              CHECK(inv.getCurrentWeight() == 0);
+          }
+
+          TEST_CASE("Inventory with invalid limits fails operations and stays unchanged") {
+              // We assume: maxSlots <= 0 OR maxWeight < 0 => invalid inventory => operations fail.
+              Inventory inv(0, -1);
+
+              Item potion = makeItem("Potion", 2, 10, HEALING, 5);
+
+              CHECK(inv.addItem(potion) == false);
+              CHECK(inv.removeItem("Potion") == false);
+              CHECK(inv.hasItem("Potion") == false);
+
+              CHECK(inv.getItemCount() == 0);
+              CHECK(inv.getCurrentWeight() == 0);
+          }
+
+          TEST_CASE("Add item within limits succeeds") {
+              Inventory inv(3, 20);
+              Item sword = makeItem("Sword", 10, 50, WEAPON, 8);
+
+              CHECK(inv.addItem(sword) == true);
+              CHECK(inv.getItemCount() == 1);
+              CHECK(inv.getCurrentWeight() == 10);
+              CHECK(inv.hasItem("Sword") == true);
+          }
+
+          TEST_CASE("hasItem is case-sensitive") {
+              Inventory inv(3, 20);
+              Item sword = makeItem("Sword", 10, 50, WEAPON, 8);
+
+              CHECK(inv.addItem(sword) == true);
+              CHECK(inv.hasItem("Sword") == true);
+              CHECK(inv.hasItem("sword") == false);
+              CHECK(inv.hasItem("SWORD") == false);
+          }
+
+          TEST_CASE("Adding items: slot limit is enforced") {
+              Inventory inv(2, 100);
+
+              Item a = makeItem("A", 10, 1, MISC, 0);
+              Item b = makeItem("B", 10, 1, MISC, 0);
+              Item c = makeItem("C", 10, 1, MISC, 0);
+
+              CHECK(inv.addItem(a) == true);
+              CHECK(inv.addItem(b) == true);
+
+              // Full by slots
+              CHECK(inv.addItem(c) == false);
+
+              CHECK(inv.getItemCount() == 2);
+              CHECK(inv.getCurrentWeight() == 20);
+              CHECK(inv.hasItem("C") == false);
+          }
+
+          TEST_CASE("Adding items: weight limit is enforced") {
+              Inventory inv(10, 15);
+
+              Item armor = makeItem("Armor", 20, 100, ARMOR, 5);
+              CHECK(inv.addItem(armor) == false);
+
+              CHECK(inv.getItemCount() == 0);
+              CHECK(inv.getCurrentWeight() == 0);
+          }
+
+          TEST_CASE("Weight boundary: exactly maxWeight is allowed") {
+              Inventory inv(10, 15);
+
+              Item x = makeItem("X", 10, 1, MISC, 0);
+              Item y = makeItem("Y", 5, 1, MISC, 0);
+
+              CHECK(inv.addItem(x) == true);
+              CHECK(inv.addItem(y) == true);
+
+              CHECK(inv.getItemCount() == 2);
+              CHECK(inv.getCurrentWeight() == 15);
+          }
+
+          TEST_CASE("On failure, addItem must not change the inventory state") {
+              Inventory inv(3, 10);
+
+              Item ok = makeItem("OK", 6, 1, MISC, 0);
+              Item tooHeavy = makeItem("Heavy", 5, 1, MISC, 0); // would exceed 10 (6+5=11)
+
+              CHECK(inv.addItem(ok) == true);
+
+              int beforeCount = inv.getItemCount();
+              int beforeWeight = inv.getCurrentWeight();
+
+              CHECK(inv.addItem(tooHeavy) == false);
+
+              CHECK(inv.getItemCount() == beforeCount);
+              CHECK(inv.getCurrentWeight() == beforeWeight);
+              CHECK(inv.hasItem("Heavy") == false);
+          }
+
+          TEST_CASE("removeItem on empty inventory fails") {
+              Inventory inv(3, 20);
+
+              CHECK(inv.removeItem("Anything") == false);
+              CHECK(inv.getItemCount() == 0);
+              CHECK(inv.getCurrentWeight() == 0);
+          }
+
+          TEST_CASE("removeItem succeeds and updates weight and count") {
+              Inventory inv(5, 50);
+
+              Item a = makeItem("Potion", 2, 10, HEALING, 5);
+              Item b = makeItem("Sword", 10, 50, WEAPON, 8);
+
+              CHECK(inv.addItem(a) == true);
+              CHECK(inv.addItem(b) == true);
+
+              CHECK(inv.getItemCount() == 2);
+              CHECK(inv.getCurrentWeight() == 12);
+
+              CHECK(inv.removeItem("Potion") == true);
+
+              CHECK(inv.getItemCount() == 1);
+              CHECK(inv.getCurrentWeight() == 10);
+              CHECK(inv.hasItem("Potion") == false);
+              CHECK(inv.hasItem("Sword") == true);
+          }
+
+          TEST_CASE("removeItem fails if name not found and does not change state") {
+              Inventory inv(5, 50);
+
+              Item a = makeItem("Potion", 2, 10, HEALING, 5);
+              CHECK(inv.addItem(a) == true);
+
+              int beforeCount = inv.getItemCount();
+              int beforeWeight = inv.getCurrentWeight();
+
+              CHECK(inv.removeItem("NotThere") == false);
+
+              CHECK(inv.getItemCount() == beforeCount);
+              CHECK(inv.getCurrentWeight() == beforeWeight);
+              CHECK(inv.hasItem("Potion") == true);
+          }
+
+          TEST_CASE("Duplicate names: removeItem removes the first match only") {
+              Inventory inv(10, 50);
+
+              Item p1 = makeItem("Potion", 2, 10, HEALING, 5);
+              Item p2 = makeItem("Potion", 3, 12, HEALING, 7);
+
+              CHECK(inv.addItem(p1) == true);
+              CHECK(inv.addItem(p2) == true);
+
+              CHECK(inv.getItemCount() == 2);
+              CHECK(inv.getCurrentWeight() == 5);
+              CHECK(inv.hasItem("Potion") == true);
+
+              // Remove should remove the first "Potion"
+              CHECK(inv.removeItem("Potion") == true);
+
+              CHECK(inv.getItemCount() == 1);
+              CHECK(inv.getCurrentWeight() == 3);
+              CHECK(inv.hasItem("Potion") == true);
+
+              CHECK(inv.removeItem("Potion") == true);
+
+              CHECK(inv.getItemCount() == 0);
+              CHECK(inv.getCurrentWeight() == 0);
+              CHECK(inv.hasItem("Potion") == false);
+          }
+
+          TEST_CASE("Validation: addItem rejects items with invalid fields (example: empty name)") {
+              Inventory inv(5, 50);
+
+              Item bad = makeItem("", 2, 10, MISC, 0);
+
+              int beforeCount = inv.getItemCount();
+              int beforeWeight = inv.getCurrentWeight();
+
+              CHECK(inv.addItem(bad) == false);
+
+              CHECK(inv.getItemCount() == beforeCount);
+              CHECK(inv.getCurrentWeight() == beforeWeight);
+          }
+
+          TEST_CASE("Validation: addItem rejects items with negative weight/value/power") {
+              Inventory inv(5, 50);
+
+              Item badW = makeItem("BadW", -1, 10, MISC, 0);
+              Item badV = makeItem("BadV", 1, -10, MISC, 0);
+              Item badP = makeItem("BadP", 1, 10, MISC, -3);
+
+              CHECK(inv.addItem(badW) == false);
+              CHECK(inv.addItem(badV) == false);
+              CHECK(inv.addItem(badP) == false);
+
+              CHECK(inv.getItemCount() == 0);
+              CHECK(inv.getCurrentWeight() == 0);
+          }
+
+          TEST_CASE("Edge: removing is case-sensitive too") {
+              Inventory inv(5, 50);
+
+              Item sword = makeItem("Sword", 10, 50, WEAPON, 8);
+              CHECK(inv.addItem(sword) == true);
+
+              CHECK(inv.removeItem("sword") == false);
+              CHECK(inv.getItemCount() == 1);
+              CHECK(inv.hasItem("Sword") == true);
+
+              CHECK(inv.removeItem("Sword") == true);
+              CHECK(inv.getItemCount() == 0);
+              CHECK(inv.hasItem("Sword") == false);
+          }
+
+          TEST_CASE("Sequence: add/remove/add maintains consistent weight/count") {
+              Inventory inv(3, 25);
+
+              Item a = makeItem("A", 5, 1, MISC, 0);
+              Item b = makeItem("B", 7, 1, MISC, 0);
+              Item c = makeItem("C", 9, 1, MISC, 0);
+
+              CHECK(inv.addItem(a) == true);
+              CHECK(inv.addItem(b) == true);
+              CHECK(inv.removeItem("A") == true);
+              CHECK(inv.addItem(c) == true);
+
+              CHECK(inv.getItemCount() == 2);
+              CHECK(inv.getCurrentWeight() == 16);
+              CHECK(inv.hasItem("B") == true);
+              CHECK(inv.hasItem("C") == true);
+              CHECK(inv.hasItem("A") == false);
+          }
+          EOF
+
+      - name: tests.cpp
+        id: tests-cpp
+        uses: classroom-resources/autograding-command-grader@v1
+        with:
+          test-name: tests.cpp
+          setup-command: ""
+          command: >
+            g++ -std=c++17 -Wall -Wextra -Werror
+            -Ithird_party
+            Item.cpp Inventory.cpp tests.cpp
+            -o tests
+            && ./tests
+          timeout: 10
+
+      - name: Autograding Reporter
+        uses: classroom-resources/autograding-grading-reporter@v1
+        env:
+          TESTS-CPP_RESULTS: ${{ steps.tests-cpp.outputs.result }}
+        with:
+          runners: tests-cpp
