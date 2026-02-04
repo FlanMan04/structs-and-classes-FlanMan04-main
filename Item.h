@@ -1,12 +1,9 @@
 #ifndef ITEM_H
 #define ITEM_H
-
 #include <string>
 
 using namespace std;
-// Implementa aquí la clase Item
-// Sigue la interfaz especificada en la asignación
-// No agregues entrada/salida
+
 
 enum ItemType {HEALING, WEAPON, ARMOR, MISC};
 
@@ -18,7 +15,9 @@ class Item {
         ItemType type;
         int power;
     public:
-        Item(std::string name, int weight, int value, ItemType type, int power);        
+        Item(std::string name, int weight, int value, ItemType type, int power);
+        Item();
+        ~Item();       
         string getName ();
         int getWeight ();
         int getValue ();
